@@ -1056,8 +1056,19 @@
       <div style="width:36px;"></div>
     </div>
     <div class="scroll-content">
-      <div class="info-box" style="margin-bottom:16px;">
-        Edit names freely. Removing a player freezes their current score and removes them from future rounds.
+
+      <div class="section-title">Add Late Joiner</div>
+      <div class="players-input-row" style="margin-bottom:8px;">
+        <input type="text" id="late-joiner-input" placeholder="Name (or comma-separated names)" />
+        <button class="add-btn" onclick="App.addLateJoiners()">+</button>
+      </div>
+      <div class="info-box" style="margin-bottom:20px;" id="late-joiner-hint">
+        If enough players are waiting to fill a court, a new match is added to the current round immediately. Otherwise they join from the next round.
+      </div>
+
+      <div class="section-title">Current Players</div>
+      <div class="info-box" style="margin-bottom:12px;font-size:12px;">
+        Edit names freely. Removing a player freezes their score and drops them from future rounds.
       </div>
       <div id="players-list"></div>
     </div>
@@ -1829,6 +1840,28 @@ const App = {
   managePlayers() {
     showScreen('screen-players');
     const t = State.current;
+
+    // Update late joiner hint with live context
+    const round = t.rounds[t.rounds.length - 1];
+    const roundComplete = Logic.isRoundComplete(round);
+    const sittingOutCount = round.sittingOut.length;
+    const freeCourts = t.courts - round.matches.length;
+    const hint = document.getElementById('late-joiner-hint');
+    if (hint) {
+      if (roundComplete) {
+        hint.textContent = `Current round is complete — new players will be scheduled from Round ${t.rounds.length + 1}.`;
+      } else if (freeCourts > 0 && sittingOutCount >= 3) {
+        const needed = 4 - (sittingOutCount % 4 || 4);
+        hint.textContent = needed === 4
+          ? `${sittingOutCount} player${sittingOutCount > 1 ? 's' : ''} sitting out + ${freeCourts} free court${freeCourts > 1 ? 's' : ''} — add ${4 - sittingOutCount % 4} more to trigger a new match now.`
+          : `${sittingOutCount} player${sittingOutCount > 1 ? 's' : ''} sitting out — add ${needed} more to fill a court and play this round!`;
+      } else if (freeCourts === 0) {
+        hint.textContent = `All ${t.courts} courts are in use — new players will join from the next round.`;
+      } else {
+        hint.textContent = `If enough players are waiting to fill a court, a new match is added to the current round immediately. Otherwise they join from the next round.`;
+      }
+    }
+
     let html = '';
     t.players.forEach((p, i) => {
       html += `<div class="player-list-item${p.frozen ? ' frozen' : ''}">
@@ -1841,6 +1874,82 @@ const App = {
       </div>`;
     });
     document.getElementById('players-list').innerHTML = html;
+  },
+
+  addLateJoiners() {
+    const t = State.current;
+    const input = document.getElementById('late-joiner-input');
+    const names = input.value.split(',').map(s => s.trim()).filter(Boolean);
+    if (!names.length) { toast('Enter at least one name'); return; }
+
+    // Create new player objects
+    const newPlayers = names.map(name => ({
+      id: Date.now().toString() + Math.random().toString(36).slice(2),
+      name,
+      active: true,
+      frozen: false,
+      lateJoiner: true,
+    }));
+    t.players.push(...newPlayers);
+
+    // Try to slot them into the current round
+    const round = t.rounds[t.rounds.length - 1];
+    const roundComplete = Logic.isRoundComplete(round);
+
+    if (!roundComplete) {
+      // Pool of available players = current sit-outs + new joiners
+      const available = [
+        ...round.sittingOut.map(id => t.players.find(p => p.id === id)).filter(Boolean),
+        ...newPlayers,
+      ];
+
+      // How many courts are still free this round?
+      const usedCourts = round.matches.length;
+      const freeCourts = t.courts - usedCourts;
+
+      // How many full groups of 4 can we form from the available pool?
+      const newMatchCount = Math.min(freeCourts, Math.floor(available.length / 4));
+
+      if (newMatchCount > 0) {
+        // Shuffle to be fair (these players weren't ranked-sorted into sit-outs necessarily)
+        const toPlay = shuffle(available).slice(0, newMatchCount * 4);
+        const stillSittingOut = available.filter(p => !toPlay.find(x => x.id === p.id));
+
+        for (let i = 0; i < newMatchCount; i++) {
+          const group = toPlay.slice(i * 4, i * 4 + 4);
+          round.matches.push({
+            id: `r${round.index}_m${round.matches.length}`,
+            court: usedCourts + i + 1,
+            teamA: [group[0].id, group[3].id],
+            teamB: [group[1].id, group[2].id],
+            scoreA: null,
+            scoreB: null,
+            lateAdded: true,
+          });
+        }
+
+        // Update sit-out list: remove those who are now playing, keep the rest + any new sit-outs
+        const playingIds = new Set(toPlay.map(p => p.id));
+        round.sittingOut = [
+          ...round.sittingOut.filter(id => !playingIds.has(id)),
+          ...newPlayers.filter(p => !playingIds.has(p.id)).map(p => p.id),
+        ];
+
+        const matchWord = newMatchCount === 1 ? 'match' : 'matches';
+        toast(`Added ${names.join(', ')} — ${newMatchCount} new ${matchWord} this round! 🎾`);
+      } else {
+        // Not enough to fill a court — sit out until next round
+        round.sittingOut.push(...newPlayers.map(p => p.id));
+        toast(`Added ${names.join(', ')} — joining next round (not enough for a full court)`);
+      }
+    } else {
+      // Round is already complete — they'll be picked up in next round generation
+      toast(`Added ${names.join(', ')} — they'll play from the next round`);
+    }
+
+    input.value = '';
+    State.updateTournament();
+    this.managePlayers();
   },
 
   removePlayerConfirm(pid) {

@@ -884,6 +884,76 @@
     transition: width 0.4s ease;
   }
   .progress-bar-val { font-size: 11px; font-weight: 700; width: 30px; }
+
+  /* ── ADD MATCH PICKER ── */
+  .add-match-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    width: 100%;
+    padding: 13px;
+    border: 2px dashed var(--border);
+    border-radius: var(--radius);
+    background: none;
+    color: var(--muted);
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    font-family: inherit;
+    margin-bottom: 12px;
+    transition: all 0.15s;
+  }
+  .add-match-btn:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-light); }
+
+  .player-picker-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    margin-bottom: 16px;
+  }
+  .picker-player {
+    padding: 10px 12px;
+    border: 2px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--card);
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    font-family: inherit;
+    text-align: left;
+    color: var(--primary);
+    transition: all 0.15s;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .picker-player:disabled { opacity: 0.35; cursor: not-allowed; }
+  .picker-player.team-a { border-color: var(--accent); background: var(--accent-light); }
+  .picker-player.team-b { border-color: var(--success); background: #dcfce7; }
+  .picker-badge {
+    font-size: 10px;
+    font-weight: 700;
+    padding: 2px 6px;
+    border-radius: 10px;
+    flex-shrink: 0;
+  }
+  .team-a .picker-badge { background: var(--accent); color: #fff; }
+  .team-b .picker-badge { background: var(--success); color: #fff; }
+
+  .picker-legend {
+    display: flex;
+    gap: 12px;
+    font-size: 12px;
+    font-weight: 600;
+    margin-bottom: 12px;
+  }
+  .legend-dot {
+    width: 10px; height: 10px;
+    border-radius: 50%;
+    display: inline-block;
+    margin-right: 4px;
+  }
 </style>
 </head>
 <body>
@@ -1098,6 +1168,23 @@
     <button class="menu-item" onclick="App.closeMenu();App.composeNextRound()"><span class="menu-icon">✏️</span>Compose next round</button>
     <button class="menu-item" onclick="App.closeMenu();App.startFinalRound()"><span class="menu-icon">🏁</span>Start final round</button>
     <button class="menu-item danger" onclick="App.closeMenu();App.confirmEndTournament()"><span class="menu-icon">🔴</span>End tournament</button>
+  </div>
+</div>
+
+<!-- ADD MATCH MODAL -->
+<div class="modal-overlay" id="add-match-modal" onclick="App.closeAddMatchModal(event)">
+  <div class="modal-sheet">
+    <div class="modal-handle"></div>
+    <div class="modal-title">ADD MATCH</div>
+    <div class="modal-subtitle" style="font-size:15px;margin-bottom:6px;">Tap players to assign teams</div>
+    <div class="picker-legend">
+      <span><span class="legend-dot" style="background:var(--accent);"></span>Team A (2 players)</span>
+      <span><span class="legend-dot" style="background:var(--success);"></span>Team B (2 players)</span>
+    </div>
+    <div class="player-picker-grid" id="picker-grid"></div>
+    <div id="picker-status" style="font-size:13px;color:var(--muted);margin-bottom:14px;min-height:18px;"></div>
+    <button class="btn-primary" id="picker-confirm-btn" onclick="App.confirmAddMatch()" disabled>Add Match</button>
+    <div style="height:4px;"></div>
   </div>
 </div>
 
@@ -1609,6 +1696,11 @@ const App = {
       </div>`;
     }
 
+    // Add match button — only show if round isn't complete and tournament is live
+    if (t.status === 'live' && isLatestRound) {
+      html += `<button class="add-match-btn" onclick="App.openAddMatchModal()">+ Add Match</button>`;
+    }
+
     if (round.sittingOut.length > 0) {
       html += `<div class="sitting-out-section">
         <div class="sitting-out-label">Sitting out</div>
@@ -1874,6 +1966,122 @@ const App = {
       </div>`;
     });
     document.getElementById('players-list').innerHTML = html;
+  },
+
+  openAddMatchModal() {
+    const t = State.current;
+    const round = t.rounds[State.viewingRound];
+
+    // Players already in a match this round
+    const inMatch = new Set(round.matches.flatMap(m => [...m.teamA, ...m.teamB]));
+
+    // All active, non-frozen players not already playing
+    const available = t.players.filter(p => p.active && !p.frozen && !inMatch.has(p.id));
+
+    if (available.length < 4) {
+      toast(`Only ${available.length} available player${available.length !== 1 ? 's' : ''} — need 4 to add a match`);
+      return;
+    }
+
+    // Track selections: null → unselected, 'A' → team A, 'B' → team B
+    State.pickerSelections = {};
+    for (const p of available) State.pickerSelections[p.id] = null;
+    State._pickerAvailable = available;
+
+    this._renderPickerGrid();
+    document.getElementById('add-match-modal').classList.add('open');
+  },
+
+  _renderPickerGrid() {
+    const available = State._pickerAvailable;
+    const sel = State.pickerSelections;
+    const teamA = available.filter(p => sel[p.id] === 'A');
+    const teamB = available.filter(p => sel[p.id] === 'B');
+
+    const grid = document.getElementById('picker-grid');
+    grid.innerHTML = available.map(p => {
+      const team = sel[p.id];
+      const cls = team === 'A' ? 'team-a' : team === 'B' ? 'team-b' : '';
+      const badge = team ? `<span class="picker-badge">${team}</span>` : '';
+      return `<button class="picker-player ${cls}" onclick="App._cyclePickerPlayer('${p.id}')">${badge}${p.name}</button>`;
+    }).join('');
+
+    const aCount = teamA.length, bCount = teamB.length;
+    const status = document.getElementById('picker-status');
+    if (aCount === 0 && bCount === 0) {
+      status.textContent = 'Tap a player to add to Team A';
+    } else if (aCount < 2) {
+      status.textContent = `Team A: ${aCount}/2 — keep tapping for Team A`;
+    } else if (bCount < 2) {
+      status.textContent = `Team A full ✓ — now pick 2 for Team B`;
+    } else {
+      status.textContent = `Teams ready: ${teamA.map(p=>p.name).join(' & ')} vs ${teamB.map(p=>p.name).join(' & ')}`;
+    }
+
+    const btn = document.getElementById('picker-confirm-btn');
+    btn.disabled = !(aCount === 2 && bCount === 2);
+  },
+
+  _cyclePickerPlayer(pid) {
+    const sel = State.pickerSelections;
+    const available = State._pickerAvailable;
+    const teamA = available.filter(p => sel[p.id] === 'A');
+    const teamB = available.filter(p => sel[p.id] === 'B');
+
+    const current = sel[pid];
+    if (current === null) {
+      // Assign to whichever team still needs players, A first
+      if (teamA.length < 2) sel[pid] = 'A';
+      else if (teamB.length < 2) sel[pid] = 'B';
+    } else if (current === 'A') {
+      // Move to B if B has room, else deselect
+      if (teamB.length < 2) sel[pid] = 'B';
+      else sel[pid] = null;
+    } else {
+      sel[pid] = null;
+    }
+    this._renderPickerGrid();
+  },
+
+  closeAddMatchModal(e) {
+    if (e && e.target !== document.getElementById('add-match-modal')) return;
+    document.getElementById('add-match-modal').classList.remove('open');
+  },
+
+  confirmAddMatch() {
+    const t = State.current;
+    const round = t.rounds[State.viewingRound];
+    const sel = State.pickerSelections;
+    const available = State._pickerAvailable;
+
+    const teamA = available.filter(p => sel[p.id] === 'A').map(p => p.id);
+    const teamB = available.filter(p => sel[p.id] === 'B').map(p => p.id);
+
+    if (teamA.length !== 2 || teamB.length !== 2) return;
+
+    // Pick next available court number
+    const usedCourts = new Set(round.matches.map(m => m.court));
+    let court = 1;
+    while (usedCourts.has(court)) court++;
+
+    round.matches.push({
+      id: `r${round.index}_m${round.matches.length}_manual`,
+      court,
+      teamA,
+      teamB,
+      scoreA: null,
+      scoreB: null,
+      manuallyAdded: true,
+    });
+
+    // Remove these players from sitting-out if they were there
+    const playingIds = new Set([...teamA, ...teamB]);
+    round.sittingOut = round.sittingOut.filter(id => !playingIds.has(id));
+
+    document.getElementById('add-match-modal').classList.remove('open');
+    State.updateTournament();
+    this.renderRound();
+    toast('Match added ✓');
   },
 
   addLateJoiners() {

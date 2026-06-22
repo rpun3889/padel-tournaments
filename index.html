@@ -1165,7 +1165,7 @@
     <button class="menu-item" onclick="App.closeMenu();App.showLeaderboard()"><span class="menu-icon">🏆</span>Leaderboard</button>
     <button class="menu-item" onclick="App.closeMenu();App.showProgress()"><span class="menu-icon">📈</span>Score progress</button>
     <button class="menu-item" onclick="App.closeMenu();App.managePlayers()"><span class="menu-icon">👥</span>Manage players</button>
-    <button class="menu-item" onclick="App.closeMenu();App.composeNextRound()"><span class="menu-icon">✏️</span>Compose next round</button>
+    <button class="menu-item" onclick="App.closeMenu();App.editCurrentRound()"><span class="menu-icon">✏️</span>Edit current round</button>
     <button class="menu-item" onclick="App.closeMenu();App.startFinalRound()"><span class="menu-icon">🏁</span>Start final round</button>
     <button class="menu-item danger" onclick="App.closeMenu();App.confirmEndTournament()"><span class="menu-icon">🔴</span>End tournament</button>
   </div>
@@ -1823,14 +1823,12 @@ const App = {
     toast('Round ' + t.rounds.length + ' started!');
   },
 
-  composeNextRound() {
+  editCurrentRound() {
     const t = State.current;
-    const currentRound = t.rounds[State.viewingRound];
-    if (!Logic.isRoundComplete(currentRound)) {
-      toast('Enter all scores first');
-      return;
-    }
-    this.startNextRound();
+    // Jump to the latest (editable) round and surface the add-match picker
+    State.viewingRound = t.rounds.length - 1;
+    this.showRound();
+    this.openAddMatchModal();
   },
 
   startFinalRound() {
